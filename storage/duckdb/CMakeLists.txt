@@ -1,4 +1,4 @@
-IF(NOT EXISTS ${CMAKE_CURRENT_LIST_DIR}/duckdb/CMakeLists.txt)
+IF("NO" STREQUAL "${PLUGIN_DUCKDB}")
   return()
 ENDIF()
 
@@ -22,6 +22,31 @@ ENDIF()
 # Mismatched _GLIBCXX_DEBUG changes sizeof(std::vector) → SIGSEGV.
 SET(CMAKE_CXX_FLAGS_DEBUG
     "${CMAKE_CXX_FLAGS_DEBUG} -U_GLIBCXX_DEBUG -U_GLIBCXX_ASSERTIONS")
+
+# Fetch the DuckDB engine plugin sources at configure time.
+# Replaces the former git submodule at storage/duckdb/duckdb.
+INCLUDE(FetchContent)
+SET(DUCKDB_ENGINE_GIT_REPO "https://github.com/drrtuy/duckdb-engine"
+    CACHE STRING "DuckDB engine plugin git repository")
+SET(DUCKDB_ENGINE_GIT_TAG  "a1749287decd7262ca6c26c3c32c8d693796791a"
+    CACHE STRING "DuckDB engine plugin commit (full SHA)")
+
+FetchContent_Declare(duckdb_engine
+  GIT_REPOSITORY "${DUCKDB_ENGINE_GIT_REPO}"
+  GIT_TAG        "${DUCKDB_ENGINE_GIT_TAG}"
+  GIT_SHALLOW    TRUE
+  SOURCE_DIR     "${CMAKE_CURRENT_SOURCE_DIR}/duckdb"
+)
+FetchContent_GetProperties(duckdb_engine)
+IF(NOT duckdb_engine_POPULATED)
+  MESSAGE(STATUS "Fetching DuckDB engine plugin @ ${DUCKDB_ENGINE_GIT_TAG}")
+  FetchContent_Populate(duckdb_engine)
+ENDIF()
+
+IF(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/duckdb/CMakeLists.txt")
+  MESSAGE(WARNING "DuckDB engine sources missing after FetchContent; skipping")
+  RETURN()
+ENDIF()
 
 add_subdirectory(duckdb)
 
