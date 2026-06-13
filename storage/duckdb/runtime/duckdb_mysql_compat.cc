@@ -48,7 +48,10 @@
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/function/scalar_function.hpp"
 #include "duckdb/function/function_set.hpp"
+#include "duckdb/function/scalar/strftime_format.hpp"
 #include "duckdb/parser/parsed_data/create_scalar_function_info.hpp"
+#include "duckdb/planner/expression/bound_function_expression.hpp"
+#include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/common/types/timestamp.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/main/connection.hpp"
@@ -983,6 +986,154 @@ static void locate_3arg_func(duckdb::DataChunk &args,
 }
 
 /* ================================================================
+   date_format(d, fmt) / time_format(t, fmt) -> VARCHAR
+
+   MariaDB DATE_FORMAT()/TIME_FORMAT() are not present in DuckDB.
+   We translate the MariaDB format string into DuckDB's strftime
+   format string and reuse DuckDB's StrfTimeFormat engine.  The
+   translation happens once in the bind phase; the parsed format is
+   stored in bind data and applied per-chunk.
+
+   Specifiers DuckDB cannot represent faithfully (%D day suffix, and
+   the year-of-week family %u/%V/%X/%x) raise an error, matching the
+   AliSQL behavior the test-suite was written against.
+   ================================================================ */
+
+static std::string translate_mariadb_date_format(const std::string &fmt)
+{
+  std::string out;
+  out.reserve(fmt.size() * 2);
+  for (size_t i= 0; i < fmt.size(); i++)
+  {
+    char c= fmt[i];
+    if (c != '%')
+    {
+      out+= c;
+      continue;
+    }
+    if (i + 1 >= fmt.size())
+      break; /* trailing '%' produces nothing, like MariaDB */
+    char s= fmt[++i];
+    switch (s)
+    {
+    case 'a': out+= "%a"; break;         /* Abbreviated weekday (Sun..Sat) */
+    case 'b': out+= "%b"; break;         /* Abbreviated month (Jan..Dec) */
+    case 'c': out+= "%-m"; break;        /* Month, numeric (0..12) */
+    case 'd': out+= "%d"; break;         /* Day of month, padded (00..31) */
+    case 'e': out+= "%-d"; break;        /* Day of month (0..31) */
+    case 'f': out+= "%f"; break;         /* Microseconds (000000..999999) */
+    case 'H': out+= "%H"; break;         /* Hour, 24h padded (00..23) */
+    case 'h': out+= "%I"; break;         /* Hour, 12h padded (01..12) */
+    case 'I': out+= "%I"; break;         /* Hour, 12h padded (01..12) */
+    case 'i': out+= "%M"; break;         /* Minutes, padded (00..59) */
+    case 'j': out+= "%j"; break;         /* Day of year (001..366) */
+    case 'k': out+= "%-H"; break;        /* Hour, 24h (0..23) */
+    case 'l': out+= "%-I"; break;        /* Hour, 12h (1..12) */
+    case 'M': out+= "%B"; break;         /* Full month name */
+    case 'm': out+= "%m"; break;         /* Month, numeric padded (00..12) */
+    case 'p': out+= "%p"; break;         /* AM or PM */
+    case 'r': out+= "%I:%M:%S %p"; break; /* Time, 12h (hh:mm:ss AM/PM) */
+    case 'S': out+= "%S"; break;         /* Seconds, padded (00..59) */
+    case 's': out+= "%S"; break;         /* Seconds, padded (00..59) */
+    case 'T': out+= "%H:%M:%S"; break;   /* Time, 24h (hh:mm:ss) */
+    case 'U': out+= "%U"; break;         /* Week (00..53), Sunday first */
+    case 'v': out+= "%V"; break;         /* Week (01..53), ISO, Monday first */
+    case 'W': out+= "%A"; break;         /* Full weekday name */
+    case 'w': out+= "%w"; break;         /* Day of week (0=Sunday..6) */
+    case 'Y': out+= "%Y"; break;         /* Year, 4 digits */
+    case 'y': out+= "%y"; break;         /* Year, 2 digits */
+    case '%': out+= "%%"; break;         /* Literal percent */
+    default:
+      throw duckdb::InvalidInputException(
+          "date_format: unsupported format specifier '%%%c'", s);
+    }
+  }
+  return out;
+}
+
+struct DateFormatBindData : public duckdb::FunctionData
+{
+  duckdb::StrfTimeFormat format;
+  bool is_null;
+
+  DateFormatBindData(duckdb::StrfTimeFormat format_p, bool is_null_p)
+      : format(std::move(format_p)), is_null(is_null_p)
+  {
+  }
+
+  duckdb::unique_ptr<duckdb::FunctionData> Copy() const override
+  {
+    return duckdb::make_uniq<DateFormatBindData>(format, is_null);
+  }
+
+  bool Equals(const duckdb::FunctionData &other_p) const override
+  {
+    auto &other= other_p.Cast<DateFormatBindData>();
+    return format.format_specifier == other.format.format_specifier;
+  }
+};
+
+static duckdb::unique_ptr<duckdb::FunctionData> date_format_bind(
+    duckdb::ClientContext &context, duckdb::ScalarFunction &,
+    duckdb::vector<duckdb::unique_ptr<duckdb::Expression>> &arguments)
+{
+  auto &format_arg= arguments[1];
+  if (format_arg->HasParameter())
+    throw duckdb::ParameterNotResolvedException();
+  if (!format_arg->IsFoldable())
+    throw duckdb::InvalidInputException(
+        "date_format format must be a constant");
+
+  duckdb::Value format_value=
+      duckdb::ExpressionExecutor::EvaluateScalar(context, *format_arg);
+  bool is_null= format_value.IsNull();
+  duckdb::StrfTimeFormat format;
+  if (!is_null)
+  {
+    std::string mariadb_fmt= format_value.GetValue<std::string>();
+    std::string duckdb_fmt= translate_mariadb_date_format(mariadb_fmt);
+    std::string error=
+        duckdb::StrTimeFormat::ParseFormatSpecifier(duckdb_fmt, format);
+    if (!error.empty())
+      throw duckdb::InvalidInputException(
+          "date_format: failed to parse format \"%s\": %s", mariadb_fmt,
+          error);
+    format.format_specifier= mariadb_fmt;
+  }
+  return duckdb::make_uniq<DateFormatBindData>(std::move(format), is_null);
+}
+
+static void date_format_timestamp_func(duckdb::DataChunk &args,
+                                       duckdb::ExpressionState &state,
+                                       duckdb::Vector &result)
+{
+  auto &func_expr= state.expr.Cast<duckdb::BoundFunctionExpression>();
+  auto &info= func_expr.bind_info->Cast<DateFormatBindData>();
+  if (info.is_null)
+  {
+    result.SetVectorType(duckdb::VectorType::CONSTANT_VECTOR);
+    duckdb::ConstantVector::SetNull(result, true);
+    return;
+  }
+  info.format.ConvertTimestampVector(args.data[0], result, args.size());
+}
+
+static void date_format_date_func(duckdb::DataChunk &args,
+                                  duckdb::ExpressionState &state,
+                                  duckdb::Vector &result)
+{
+  auto &func_expr= state.expr.Cast<duckdb::BoundFunctionExpression>();
+  auto &info= func_expr.bind_info->Cast<DateFormatBindData>();
+  if (info.is_null)
+  {
+    result.SetVectorType(duckdb::VectorType::CONSTANT_VECTOR);
+    duckdb::ConstantVector::SetNull(result, true);
+    return;
+  }
+  info.format.ConvertDateVector(args.data[0], result, args.size());
+}
+
+/* ================================================================
    Registration
    ================================================================ */
 
@@ -1403,11 +1554,32 @@ void register_mysql_compat_functions(duckdb::DatabaseInstance &db)
     catalog.CreateFunction(transaction, info);
   }
 
+  /* date_format(d, fmt) / time_format(t, fmt) -> VARCHAR */
+  {
+    using namespace duckdb;
+    for (const char *name : {"date_format", "time_format"})
+    {
+      ScalarFunctionSet set(name);
+      set.AddFunction(ScalarFunction(
+          {LogicalType::TIMESTAMP, LogicalType::VARCHAR},
+          LogicalType::VARCHAR, date_format_timestamp_func, date_format_bind));
+      set.AddFunction(ScalarFunction(
+          {LogicalType::TIMESTAMP_TZ, LogicalType::VARCHAR},
+          LogicalType::VARCHAR, date_format_timestamp_func, date_format_bind));
+      set.AddFunction(ScalarFunction(
+          {LogicalType::DATE, LogicalType::VARCHAR},
+          LogicalType::VARCHAR, date_format_date_func, date_format_bind));
+      CreateScalarFunctionInfo info(std::move(set));
+      info.on_conflict= OnCreateConflict::ALTER_ON_CONFLICT;
+      catalog.CreateFunction(transaction, info);
+    }
+  }
+
   sql_print_information(
       "DuckDB: registered MySQL-compatible function overloads "
       "(octet_length, length, ascii, ord, hex, oct, bin, locate, mid, "
       "rtrim, ltrim, regexp_instr, regexp_replace, regexp_substr, "
-      "json_unquote, json_contains)");
+      "json_unquote, json_contains, date_format, time_format)");
 }
 
 } /* namespace myduck */
