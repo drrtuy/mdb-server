@@ -4,7 +4,7 @@
 #
 #   SF         TPC-H scale factor                         (default 10)
 #   DATA_DIR   where .tbl files are generated/loaded from (default /git/tpch/sf<SF>)
-#   SCHEMA     DuckDB schema populated via run_in_duckdb (default bench)
+#   SCHEMA     DuckDB schema populated via MariaDB's (default bench)
 #   TPCH_SQL   MariaDB-dialect query file (source of the 22 queries)
 #   MARIADB    mariadb client command
 
@@ -25,4 +25,15 @@ duck() {
   local esc
   esc=$(printf '%s' "$1" | sed "s/'/''/g")
   "$MARIADB" -N -e "SELECT run_in_duckdb('$esc')"
+}
+
+# Run one SQL statement directly through the mariadb client, server-wide
+# (no default database). Use for CREATE DATABASE and other global DDL.
+mdb() {
+  "$MARIADB" -N -e "$1"
+}
+
+# Run one SQL statement directly through the mariadb client within $SCHEMA.
+mdb_db() {
+  "$MARIADB" -N -D "$SCHEMA" -e "$1"
 }
