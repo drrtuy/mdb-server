@@ -43,7 +43,6 @@ SET(_DUCKDB_STATIC_LIBS
   "${_DUCKDB_BUILD_DIR}/extension/libduckdb_generated_extension_loader.a"
   "${_DUCKDB_BUILD_DIR}/extension/core_functions/libcore_functions_extension.a"
   "${_DUCKDB_BUILD_DIR}/extension/icu/libicu_extension.a"
-  "${_DUCKDB_BUILD_DIR}/extension/jemalloc/libjemalloc_extension.a"
   "${_DUCKDB_BUILD_DIR}/extension/parquet/libparquet_extension.a"
   "${_DUCKDB_BUILD_DIR}/extension/json/libjson_extension.a"
 )
@@ -51,11 +50,7 @@ SET(_DUCKDB_STATIC_LIBS
 MESSAGE(STATUS "=== Building DuckDB from submodule (${DUCKDB_SUBMODULE_DIR}) ===")
 ADD_SUBMODULE(third_parties/duckdb)
 
-# Upstream sets DUCKDB_EXTENSION_JEMALLOC_LINKED via add_extension_definitions(),
-# which runs in extension/ but NOT in src/, so allocator.cpp (in duckdb_static)
-# compiles the glibc malloc() path even though libjemalloc_extension.a is linked.
-# Define it globally + add the jemalloc header dir so the USE_JEMALLOC branch is active.
-SET(_DUCKDB_EXTRA_CXX_FLAGS "-DDUCKDB_EXTENSION_JEMALLOC_LINKED=1 -I${DUCKDB_SUBMODULE_DIR}/extension/jemalloc/include")
+SET(_DUCKDB_EXTRA_CXX_FLAGS "")
 # GCC 16+ warns about DuckDB classes in SFINAE contexts (upstream issue, not ours).
 # Silence it for DuckDB's own ExternalProject build too.
 MY_CHECK_CXX_COMPILER_FLAG("-Wsfinae-incomplete")
