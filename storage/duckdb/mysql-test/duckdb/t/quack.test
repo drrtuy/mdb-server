@@ -1,0 +1,26 @@
+--source ../include/have_duckdb.inc
+
+SELECT @@GLOBAL.duckdb_quack_enabled = 0 AS disabled_by_default;
+SELECT @@GLOBAL.duckdb_quack_port = 9494 AS default_port;
+--error ER_INCORRECT_GLOBAL_LOCAL_VAR
+SET GLOBAL duckdb_quack_enabled = ON;
+--error ER_INCORRECT_GLOBAL_LOCAL_VAR
+SET GLOBAL duckdb_quack_port = 9500;
+
+--let $quack_port = `SELECT @@port + 100`
+--let $restart_parameters = --duckdb-quack-enabled=ON --duckdb-quack-port=$quack_port
+--source include/restart_mysqld.inc
+
+SELECT @@GLOBAL.duckdb_quack_enabled = 1 AS enabled;
+--replace_result $quack_port QUACK_PORT
+--eval SELECT @@GLOBAL.duckdb_quack_port = $quack_port AS configured_port
+--replace_result $quack_port QUACK_PORT
+--eval SELECT run_in_duckdb("FROM quack_query('quack:127.0.0.1:$quack_port', 'SELECT 42 AS answer', token := 'wrong-token')")
+
+--source include/restart_mysqld.inc
+--replace_result $quack_port QUACK_PORT
+--eval SELECT run_in_duckdb("FROM quack_query('quack:127.0.0.1:$quack_port', 'SELECT 43 AS answer', token := 'wrong-token')")
+
+--let $restart_parameters =
+--source include/restart_mysqld.inc
+SELECT @@GLOBAL.duckdb_quack_enabled = 0 AS disabled_after_restart;

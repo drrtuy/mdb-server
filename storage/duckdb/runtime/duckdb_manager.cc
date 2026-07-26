@@ -39,6 +39,60 @@ DuckdbManager *DuckdbManager::m_instance= nullptr;
 
 DuckdbManager::DuckdbManager() : m_database(nullptr) {}
 
+void DuckdbManager::StartQuack(duckdb::Connection &connection)
+{
+  auto execute= [&connection](const std::string &sql) {
+    auto result= connection.Query(sql);
+    if (!result)
+      throw duckdb::InternalException("Quack initialization query returned no result");
+    if (result->HasError())
+      throw duckdb::InvalidInputException("Quack initialization failed: %s",
+                                          result->GetError());
+  };
+
+  execute("LOAD httpfs");
+  execute("LOAD quack");
+  execute("CREATE OR REPLACE MACRO mariadb_quack_allow_auth("
+          "session_id, client_token, server_token) AS true");
+  execute("CREATE OR REPLACE MACRO mariadb_quack_allow_query("
+          "session_id, query) AS true");
+  execute("SET GLOBAL quack_authentication_function = "
+          "'mariadb_quack_allow_auth'");
+  execute("SET GLOBAL quack_authorization_function = "
+          "'mariadb_quack_allow_query'");
+
+  std::string uri= "quack:127.0.0.1:" + std::to_string(global_quack_port);
+  execute("CALL quack_serve('" + uri + "', token := 'anonymous')");
+  m_quack_running= true;
+  sql_print_information("DuckDB: Quack server listening on %s", uri.c_str());
+}
+
+void DuckdbManager::StopQuack()
+{
+  if (!m_quack_running || m_database == nullptr)
+    return;
+
+  try
+  {
+    duckdb::Connection connection(*m_database);
+    std::string uri= "quack:127.0.0.1:" + std::to_string(global_quack_port);
+    auto result= connection.Query("CALL quack_stop('" + uri + "')");
+    if (!result || result->HasError())
+      sql_print_error("DuckDB: failed to stop Quack server on %s: %s",
+                      uri.c_str(), result ? result->GetError().c_str()
+                                          : "query returned no result");
+  }
+  catch (const std::exception &e)
+  {
+    sql_print_error("DuckDB: failed to stop Quack server: %s", e.what());
+  }
+  catch (...)
+  {
+    sql_print_error("DuckDB: failed to stop Quack server: unknown exception");
+  }
+  m_quack_running= false;
+}
+
 namespace
 {
 
@@ -257,6 +311,9 @@ bool DuckdbManager::Initialize()
     /* Register cross-engine scan support (_mdb_scan + replacement scan) */
     register_cross_engine_scan(*m_database->instance);
 
+    if (global_quack_enabled)
+      StartQuack(*con);
+
     sql_print_information("DuckDB: DuckdbManager::Initialize succeed, path=%s",
                           path);
     return false;
@@ -310,6 +367,7 @@ bool DuckdbManager::CreateInstance()
 
 DuckdbManager::~DuckdbManager()
 {
+  StopQuack();
   if (m_database != nullptr)
   {
     try

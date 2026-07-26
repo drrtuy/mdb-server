@@ -36,6 +36,8 @@ my_bool global_use_dio= FALSE;
 my_bool global_scheduler_process_partial= TRUE;
 my_bool use_double_for_decimal= TRUE;
 my_bool require_primary_key= TRUE;
+my_bool global_quack_enabled= FALSE;
+uint global_quack_port= 9494;
 
 const char *explain_output_names[]= {"ALL", "OPTIMIZED_ONLY", "PHYSICAL_ONLY",
                                      NullS};

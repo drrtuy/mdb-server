@@ -49,8 +49,11 @@ private:
   ~DuckdbManager();
 
   bool Initialize();
+  void StartQuack(duckdb::Connection &connection);
+  void StopQuack();
 
   duckdb::DuckDB *m_database= nullptr;
+  bool m_quack_running= false;
   std::mutex m_mutex;
 };
 

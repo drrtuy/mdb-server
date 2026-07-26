@@ -1283,6 +1283,16 @@ static MYSQL_SYSVAR_BOOL(require_primary_key, myduck::require_primary_key,
                          "Require primary key for DuckDB tables", NULL, NULL,
                          TRUE);
 
+static MYSQL_SYSVAR_BOOL(quack_enabled, myduck::global_quack_enabled,
+                         PLUGIN_VAR_READONLY | PLUGIN_VAR_RQCMDARG,
+                         "Enable the localhost-only DuckDB Quack server",
+                         NULL, NULL, FALSE);
+
+static MYSQL_SYSVAR_UINT(quack_port, myduck::global_quack_port,
+                         PLUGIN_VAR_READONLY | PLUGIN_VAR_RQCMDARG,
+                         "Port for the localhost-only DuckDB Quack server",
+                         NULL, NULL, 9494, 1, 65535, 0);
+
 static MYSQL_SYSVAR_ULONGLONG(appender_allocator_flush_threshold,
                               myduck::appender_allocator_flush_threshold,
                               PLUGIN_VAR_RQCMDARG,
@@ -1360,8 +1370,8 @@ static struct st_mysql_sys_var *duckdb_system_variables[]= {
     MYSQL_SYSVAR(max_temp_directory_size), MYSQL_SYSVAR(max_threads),
     MYSQL_SYSVAR(use_direct_io), MYSQL_SYSVAR(scheduler_process_partial),
     MYSQL_SYSVAR(checkpoint_threshold), MYSQL_SYSVAR(use_double_for_decimal),
-    MYSQL_SYSVAR(require_primary_key),
-    MYSQL_SYSVAR(appender_allocator_flush_threshold),
+    MYSQL_SYSVAR(require_primary_key), MYSQL_SYSVAR(quack_enabled),
+    MYSQL_SYSVAR(quack_port), MYSQL_SYSVAR(appender_allocator_flush_threshold),
     MYSQL_SYSVAR(log_options),
     /* Session proxy */
     MYSQL_SYSVAR(merge_join_threshold), MYSQL_SYSVAR(force_no_collation),

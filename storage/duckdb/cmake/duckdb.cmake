@@ -35,9 +35,15 @@ ELSE()
 ENDIF()
 
 SET(_DUCKDB_BUILD_DIR "${CMAKE_CURRENT_BINARY_DIR}/duckdb-build")
+FILE(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/cmake/duckdb_extensions.cmake"
+  _DUCKDB_EXTENSION_CONFIG_HASH)
+SET(_DUCKDB_EXTENSION_CONFIG
+  "${CMAKE_CURRENT_BINARY_DIR}/duckdb_extensions-${_DUCKDB_EXTENSION_CONFIG_HASH}.cmake")
+CONFIGURE_FILE("${CMAKE_CURRENT_SOURCE_DIR}/cmake/duckdb_extensions.cmake"
+  "${_DUCKDB_EXTENSION_CONFIG}" COPYONLY)
 
-# The individual static archives DuckDB produces (for the three extensions
-# listed in cmake/duckdb_extensions.cmake: core_functions, icu, json).
+# The individual static archives DuckDB produces for the extensions listed in
+# cmake/duckdb_extensions.cmake.
 SET(_DUCKDB_STATIC_LIBS
   "${_DUCKDB_BUILD_DIR}/src/libduckdb_static.a"
   "${_DUCKDB_BUILD_DIR}/extension/libduckdb_generated_extension_loader.a"
@@ -45,6 +51,8 @@ SET(_DUCKDB_STATIC_LIBS
   "${_DUCKDB_BUILD_DIR}/extension/icu/libicu_extension.a"
   "${_DUCKDB_BUILD_DIR}/extension/parquet/libparquet_extension.a"
   "${_DUCKDB_BUILD_DIR}/extension/json/libjson_extension.a"
+  "${_DUCKDB_BUILD_DIR}/extension/httpfs/libhttpfs_extension.a"
+  "${_DUCKDB_BUILD_DIR}/extension/quack/libquack_extension.a"
 )
 
 MESSAGE(STATUS "=== Building DuckDB from submodule (${DUCKDB_SUBMODULE_DIR}) ===")
@@ -86,7 +94,7 @@ ExternalProject_Add(duckdb_build
     -DBUILD_BENCHMARKS=OFF
     -DBUILD_TPCE=OFF
     -DEXTENSION_STATIC_BUILD=1
-    "-DDUCKDB_EXTENSION_CONFIGS=${CMAKE_CURRENT_SOURCE_DIR}/cmake/duckdb_extensions.cmake"
+    "-DDUCKDB_EXTENSION_CONFIGS=${_DUCKDB_EXTENSION_CONFIG}"
     "-DCMAKE_CXX_FLAGS=${_DUCKDB_EXTRA_CXX_FLAGS}"
     -DENABLE_SANITIZER=${ADDRESS_SANITIZER}
     -DENABLE_UBSAN=${UB_SANITIZER}
@@ -96,10 +104,16 @@ ExternalProject_Add(duckdb_build
   USES_TERMINAL_BUILD ON
 )
 
+# The httpfs extension pulls in OpenSSL and libcurl at link time.
+FIND_PACKAGE(CURL REQUIRED)
+FIND_PACKAGE(OpenSSL REQUIRED)
+
 # Expose all DuckDB archives as a single INTERFACE target so the rest of the
 # cmake tree links against "libduckdb" unchanged.
 ADD_LIBRARY(libduckdb INTERFACE)
-TARGET_LINK_LIBRARIES(libduckdb INTERFACE -Wl,--start-group ${_DUCKDB_STATIC_LIBS} -Wl,--end-group)
+TARGET_LINK_LIBRARIES(libduckdb INTERFACE
+  -Wl,--start-group ${_DUCKDB_STATIC_LIBS} -Wl,--end-group
+  CURL::libcurl OpenSSL::SSL OpenSSL::Crypto)
 ADD_DEPENDENCIES(libduckdb duckdb_build)
 
 MESSAGE(STATUS "DuckDB include: ${DUCKDB_INCLUDE_DIR}")

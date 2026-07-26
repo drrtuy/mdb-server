@@ -3,3 +3,4 @@ plugin-maturity=alpha
 plugin-load-add=ha_duckdb.so
 duckdb-allow-run-in-duckdb=ON
 #loose-duckdb-memory-limit=10G
+duckdb_quack_enabled=ON

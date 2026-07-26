@@ -40,6 +40,8 @@ extern my_bool global_use_dio;
 extern my_bool global_scheduler_process_partial;
 extern my_bool use_double_for_decimal;
 extern my_bool require_primary_key;
+extern my_bool global_quack_enabled;
+extern uint global_quack_port;
 
 std::string BytesToHumanReadableString(uint64_t bytes,
                                        uint64_t multiplier= 1024);
