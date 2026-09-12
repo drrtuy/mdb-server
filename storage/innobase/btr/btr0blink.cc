@@ -118,7 +118,8 @@ static buf_block_t *blink_move_right(buf_block_t *block,
     const int comparison= cmp_dtuple_rec(tuple, high_key, index, offsets);
     if (heap)
       mem_heap_free(heap);
-    if (comparison < 0 || (comparison == 0 && mode == PAGE_CUR_L))
+    if (comparison < 0 ||
+        (comparison == 0 && (mode == PAGE_CUR_GE || mode == PAGE_CUR_L)))
       return block;
     buf_block_t *right= btr_block_get(*index, next, latch, mtr, err);
     if (!right || !blink_page_matches(right->page.frame, index, level)) {
@@ -237,13 +238,13 @@ restart:
       return DB_CORRUPTION;
     }
 
-    block= blink_move_right(block, tuple, mode, latch, index, mtr, &err);
+    const page_cur_mode_t search_mode= current_level == target_level
+      ? mode : blink_internal_mode(mode);
+    block= blink_move_right(block, tuple, search_mode, latch, index, mtr, &err);
     if (!block)
       return err;
     page= block->page.frame;
     cursor->page_cur.block= block;
-    const page_cur_mode_t search_mode= current_level == target_level
-      ? mode : blink_internal_mode(mode);
     if (page_cur_search_with_match(tuple, search_mode, &cursor->up_match,
                                    &cursor->low_match, &cursor->page_cur,
                                    nullptr)) {
