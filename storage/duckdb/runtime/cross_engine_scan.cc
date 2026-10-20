@@ -437,8 +437,11 @@ static void mdb_scan_function(duckdb::ClientContext &context,
     if (state.fiber->error)
     {
       state.finished= true;
-      output.SetCardinality(0);
-      return;
+      throw duckdb::InvalidInputException(
+          "_mdb_scan of `%s`.`%s` failed: %s", state.fiber->db_name,
+          state.fiber->table_name,
+          state.fiber->error_msg.empty() ? std::string("unknown error")
+                                         : state.fiber->error_msg);
     }
 
     if (state.fiber->buffer.size() > 0)
