@@ -40,6 +40,8 @@
 #include "duckdb/parser/tableref/table_function_ref.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
+#include "duckdb/planner/filter/expression_filter.hpp"
+#include "duckdb/planner/table_filter_set.hpp"
 
 extern "C" pthread_key(struct st_my_thread_var *, THR_KEY_mysys);
 
@@ -284,7 +286,7 @@ static duckdb::unique_ptr<duckdb::FunctionData>
 mdb_scan_bind(duckdb::ClientContext &context,
               duckdb::TableFunctionBindInput &input,
               duckdb::vector<duckdb::LogicalType> &return_types,
-              duckdb::vector<duckdb::string> &names)
+              duckdb::vector<duckdb::Identifier> &names)
 {
   auto key= input.inputs[0].GetValue<std::string>();
 
@@ -296,7 +298,8 @@ mdb_scan_bind(duckdb::ClientContext &context,
 
   for (Field **f= tbl->field; *f && (*f)->invisible == VISIBLE; f++)
   {
-    names.push_back((*f)->field_name.str);
+    names.emplace_back(
+        std::string((*f)->field_name.str, (*f)->field_name.length));
     return_types.push_back(field_to_logical_type(*f));
   }
 
@@ -323,9 +326,9 @@ mdb_scan_init_global(duckdb::ClientContext &context,
   if ((myduck::duckdb_log_options & LOG_DUCKDB_QUERY) && input.filters)
   {
     TABLE *tbl= bind_data.table;
-    for (auto &entry : input.filters->filters)
+    for (auto &entry : *input.filters)
     {
-      duckdb::idx_t proj_idx= entry.first;
+      duckdb::idx_t proj_idx= entry.GetIndex();
       std::string col_name= "?";
       /* Map projected index → original column via column_ids → field name */
       if (proj_idx < input.column_ids.size())
@@ -341,7 +344,11 @@ mdb_scan_init_global(duckdb::ClientContext &context,
           }
         }
       }
-      std::string desc= entry.second->ToString(col_name);
+      const duckdb::TableFilter &filter= entry.Filter();
+      std::string desc=
+          filter.filter_type == duckdb::TableFilterType::EXPRESSION_FILTER
+              ? filter.Cast<duckdb::ExpressionFilter>().ToString(col_name)
+              : "filter type " + std::to_string((int) filter.filter_type);
       sql_print_information(
           "CROSS-ENGINE: DuckDB filter[%llu] col='%s': %s",
           (ulonglong) proj_idx, col_name.c_str(), desc.c_str());
@@ -360,14 +367,14 @@ static void mdb_scan_function(duckdb::ClientContext &context,
 
   if (state.finished)
   {
-    output.SetCardinality(0);
+    output.SetChildCardinality(0);
     return;
   }
 
   TABLE *tbl= state.table;
   if (!tbl)
   {
-    output.SetCardinality(0);
+    output.SetChildCardinality(0);
     state.finished= true;
     return;
   }
@@ -394,7 +401,7 @@ static void mdb_scan_function(duckdb::ClientContext &context,
       if (state.fiber->init(tbl, state.column_ids, col_types, where_sql))
       {
         state.finished= true;
-        output.SetCardinality(0);
+        output.SetChildCardinality(0);
         state.fiber.reset();
         return;
       }
@@ -437,7 +444,7 @@ static void mdb_scan_function(duckdb::ClientContext &context,
     if (state.fiber->error)
     {
       state.finished= true;
-      output.SetCardinality(0);
+      output.SetChildCardinality(0);
       return;
     }
 
@@ -449,7 +456,7 @@ static void mdb_scan_function(duckdb::ClientContext &context,
     }
     else
     {
-      output.SetCardinality(0);
+      output.SetChildCardinality(0);
       state.finished= true;
     }
     return;
@@ -473,7 +480,7 @@ static void mdb_scan_function(duckdb::ClientContext &context,
     if (tbl->file->ha_rnd_init(true))
     {
       state.finished= true;
-      output.SetCardinality(0);
+      output.SetChildCardinality(0);
       if (_current_thd() != prev_thd)
         set_current_thd(prev_thd);
       return;
@@ -509,7 +516,7 @@ static void mdb_scan_function(duckdb::ClientContext &context,
     count++;
   }
 
-  output.SetCardinality(count);
+  output.SetChildCardinality(count);
 
   if (_current_thd() != prev_thd)
     set_current_thd(prev_thd);
@@ -530,15 +537,15 @@ duckdb::unique_ptr<duckdb::TableRef> mariadb_replacement_scan(
   auto ref= duckdb::make_uniq<duckdb::TableFunctionRef>();
 
   duckdb::vector<duckdb::unique_ptr<duckdb::ParsedExpression>> children;
-  children.push_back(duckdb::make_uniq<duckdb::ConstantExpression>(
-      duckdb::Value(input.table_name)));
+  children.push_back(
+      duckdb::ConstantExpression::FromValue(duckdb::Value(input.table_name)));
 
   const char *func_name=
       cross_engine_ryow_enabled() ? "_mdb_scan_direct" : "_mdb_scan";
 
   ref->function= duckdb::make_uniq<duckdb::FunctionExpression>(
       func_name, std::move(children));
-  ref->alias= input.table_name;
+  ref->alias= duckdb::Identifier(input.table_name);
 
   if (myduck::duckdb_log_options & LOG_DUCKDB_QUERY)
     sql_print_information(
